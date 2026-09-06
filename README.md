@@ -1,149 +1,177 @@
 # SmartFlow Engine
 
-Aplicación web desarrollada con JavaScript moderno que implementa un motor algorítmico de planificación basado en grafos, scoring dinámico, detección de conflictos, optimización de tareas con concurrencia real, arquitectura orientada a eventos, persistencia local, simulación y benchmarking.
+Modern JavaScript web application implementing an algorithmic planning engine based on graphs, dynamic scoring, conflict detection, concurrent task optimization, event-driven architecture, local persistence, simulation, and benchmarking.
 
-El gestor de tareas es solo la interfaz. El proyecto real es el motor: `src/core/`.
+The task manager is only the interface. The actual project is the engine: `src/core/`.
 
-## 1. Qué es
+## 1. What it is
 
-Dado un conjunto de tareas con dependencias, recursos, prioridades y deadlines, SmartFlow Engine calcula automáticamente **qué tareas pueden ejecutarse en paralelo, en qué orden, y con qué prioridad**, detectando de antemano cualquier situación que haga el plan inviable (ciclos, deadlines imposibles, recursos insuficientes).
+Given a set of tasks with dependencies, resources, priorities, and deadlines, SmartFlow Engine automatically calculates **which tasks can run in parallel, in what order, and with what priority**, detecting in advance any situation that would make the plan infeasible (cycles, impossible deadlines, insufficient resources).
 
-## 2. Problema que resuelve
+## 2. Problem it solves
 
-No es un TODO-list. El problema real es una variante de **RCPSP (Resource-Constrained Project Scheduling Problem)**: planificar tareas con precedencia (grafo dirigido), recursos limitados y un límite de concurrencia, maximizando un score configurable. Este problema es NP-hard en el caso general — el motor usa una heurística greedy determinista, no un solver exacto, y lo documenta como tal en el propio código en vez de fingir optimalidad.
+This is not a TODO list. The real problem is a variant of **RCPSP (Resource-Constrained Project Scheduling Problem)**: scheduling tasks with precedence constraints (directed graph), limited resources, and a concurrency limit, while maximizing a configurable score.
 
-## 3. Arquitectura
+This problem is NP-hard in the general case — the engine uses a deterministic greedy heuristic, not an exact solver, and explicitly documents this in the code rather than pretending to provide optimal solutions.
 
-```
+## 3. Architecture
+
+```text
 /src
   /core           PlanningEngine, DependencyGraph, ScoringEngine, ConflictDetector, Optimizer
-  /models         Task (factory inmutable)
-  /events         EventBus + catálogo de eventos
-  /simulation     SimulationEngine (reloj real, Promises)
-  /data           TaskRepository (persistencia) + DataGenerator (datasets sintéticos)
-  /performance    Cache (LRU genérica), Benchmark, planningWorker (Web Worker)
-  /errors         PlanningError + catálogo de códigos
+  /models         Task (immutable factory)
+  /events         EventBus + event catalog
+  /simulation     SimulationEngine (real clock, Promises)
+  /data           TaskRepository (persistence) + DataGenerator (synthetic datasets)
+  /performance    Cache (generic LRU), Benchmark, planningWorker (Web Worker)
+  /errors         PlanningError + error code catalog
   /utils          validation, dateUtils, helpers (debounce/throttle/escapeHtml), PriorityQueue
   /ui             Dashboard, TaskManager, GraphView, OptimizerView, SimulationView,
                   PerformanceView, EventLogView, styles.css
-  app.js          orquestador de la UI (estado + wiring)
-/tests            51 tests (node:test), un test por módulo del núcleo
-/scripts          verify-ui.mjs — smoke test de la UI completa con jsdom
+  app.js          UI orchestrator (state + wiring)
+/tests            51 tests (node:test), one test per core module
+/scripts           verify-ui.mjs — full UI smoke test with jsdom
 index.html
 ```
 
-**Regla de dependencia respetada en todo el proyecto:** la UI importa el motor; el motor nunca importa nada de `/ui`. `PlanningEngine.optimize()` es una función pura de principio a fin — mismos `(tasks, constraints)`, mismo resultado — lo que la hace trivial de testear, cachear y (a partir de cierto tamaño) delegar a un Web Worker sin rediseñar nada.
+**Dependency rule respected throughout the entire project:** the UI imports the engine; the engine never imports anything from `/ui`.
 
-## 4. Algoritmos utilizados
+`PlanningEngine.optimize()` is a pure function from start to finish — same `(tasks, constraints)`, same result — making it trivial to test, cache, and, once the dataset reaches a certain size, delegate to a Web Worker without redesigning anything.
 
-- **DFS iterativo con coloreado de nodos** (WHITE/GRAY/BLACK) para detectar ciclos, reconstruyendo el camino exacto — no solo "existe un ciclo". Iterativo (pila explícita) a propósito: con miles de tareas encadenadas, una versión recursiva arriesgaría un stack overflow.
-- **Kahn's algorithm** (BFS por grados de entrada) para el ordenamiento topológico, elegido sobre la variante DFS porque produce "niveles" (oleadas de tareas que se desbloquean juntas), la estructura que necesitan tanto `ConflictDetector` (sobrecarga de recursos) como `GraphView` (layout por columnas).
-- **Earliest-finish-time (estilo CPM)** para detectar deadlines matemáticamente imposibles: calcula la cota inferior real del mejor caso (concurrencia ilimitada) y la compara contra el tiempo disponible.
-- **Scheduling greedy con heap persistente**: cada tarea entra a una cola de prioridad (binary heap) exactamente una vez, en el instante en que sus dependencias se completan, con su score fijado en ese momento. La admisión aplica, en orden estricto: dependencias → recursos → concurrencia (`maxConcurrency`) → score.
-- **Sweep-line** para calcular qué tareas se solaparon en el tiempo (`concurrentWith`), en vez de comparar todos los pares.
-- **Mulberry32** (PRNG con semilla) en `DataGenerator`, para que los benchmarks sean reproducibles.
+## 4. Algorithms used
 
-## 5. Complejidad temporal
+* **Iterative DFS with node coloring** (WHITE/GRAY/BLACK) to detect cycles, reconstructing the exact path — not merely reporting that "a cycle exists." Iterative traversal is intentional: with thousands of chained tasks, a recursive implementation could risk a stack overflow.
+* **Kahn's algorithm** (BFS based on in-degree) for topological sorting, chosen over the DFS variant because it produces "levels" (waves of tasks that become unlocked together), the structure required by both `ConflictDetector` (resource overload) and `GraphView` (column-based layout).
+* **Earliest-finish-time (CPM-style)** to detect mathematically impossible deadlines: it calculates the true lower bound of the best-case scenario (unlimited concurrency) and compares it against the available time.
+* **Greedy scheduling with a persistent heap**: each task enters a priority queue exactly once, at the moment its dependencies are completed, with its score fixed at that moment. Admission is applied in strict order: dependencies → resources → concurrency (`maxConcurrency`) → score.
+* **Sweep-line** to calculate which tasks overlapped in time (`concurrentWith`), instead of comparing every possible pair.
+* **Mulberry32** (seeded PRNG) in `DataGenerator`, making benchmarks reproducible.
 
-| Operación | Complejidad |
-|---|---|
-| Construcción del grafo | O(V + E) |
-| Detección de ciclos | O(V + E) |
-| Ordenamiento topológico | O(V + E) |
-| Earliest-finish (deadlines) | O(V + E) |
-| Optimizer (scheduling completo) | O(V log V + E) |
-| `concurrentWith` (sweep-line) | O(V · concurrencia pico), no O(V²) |
+## 5. Time complexity
 
-**Nota de auditoría honesta:** la primera implementación del Optimizer recalculaba el frente de tareas disponibles completo en cada evento de finalización (O(V) por evento), degenerando en O(V²) real y agotando memoria con 5000 tareas. Se corrigió con un heap persistente + desbloqueo incremental por dependientes (ver comentario extenso en `Optimizer.js`). Esto no es una nota académica: fue un bug real, detectado ejecutando el benchmark, no una limitación teórica anticipada de antemano.
+| Operation                     | Complexity                         |
+| ----------------------------- | ---------------------------------- |
+| Graph construction            | O(V + E)                           |
+| Cycle detection               | O(V + E)                           |
+| Topological sorting           | O(V + E)                           |
+| Earliest-finish (deadlines)   | O(V + E)                           |
+| Optimizer (full scheduling)   | O(V log V + E)                     |
+| `concurrentWith` (sweep-line) | O(V · peak concurrency), not O(V²) |
 
-## 6. Gestión de dependencias
+**Honest audit note:** the first implementation of the Optimizer recalculated the entire available-task frontier on every completion event (O(V) per event), degenerating into a real O(V²) implementation and exhausting memory with 5,000 tasks.
 
-Las tareas se modelan como un grafo dirigido (`A → B` significa "A depende de B"). `DependencyGraph` mantiene adyacencia directa e inversa (`Map<id, Set<id>>`) para que tanto "de qué depende" como "a quién desbloqueo" sean O(1)/O(grado). Un ciclo se reporta con el camino exacto (`metadata.cyclePath`), y cualquier tarea que dependa transitivamente de una tarea inejecutable (cíclica o con un recurso imposible) se marca `BLOCKED_TASK` — nunca se descubre el bloqueo "por accidente" durante el scheduling.
+It was fixed using a persistent heap + incremental unlocking through dependents (see the extensive comment in `Optimizer.js`). This is not an academic note: it was a real bug detected by running the benchmark, not a theoretical limitation anticipated in advance.
 
-## 7. Sistema de scoring
+## 6. Dependency management
 
-`ScoringEngine.score(task, context)` es una envoltura con memoization sobre `computeScore()`, una función pura. El score combina, de forma configurable (pesos 0-50 desde la UI):
+Tasks are modeled as a directed graph (`A → B` means "A depends on B").
 
-```
+`DependencyGraph` maintains both direct and reverse adjacency (`Map<id, Set<id>>`) so that both "what does this depend on?" and "who do I unlock?" operations are O(1)/O(degree).
+
+A cycle is reported with its exact path (`metadata.cyclePath`), and any task that transitively depends on an unexecutable task (cyclic or requiring an impossible resource) is marked `BLOCKED_TASK` — the blockage is never discovered "by accident" during scheduling.
+
+## 7. Scoring system
+
+`ScoringEngine.score(task, context)` is a memoized wrapper around `computeScore()`, which is a pure function.
+
+The score combines the following configurable factors (weights from 0–50 in the UI):
+
+```text
 score = priority + urgency + importance + deadlineUrgency + delay + dependencyImpact
         − durationPenalty − difficultyPenalty
 ```
 
-`dependencyImpact` usa el número de **dependientes directos** (no el cierre transitivo completo): calcular el impacto transitivo real de cada tarea sería O(V·(V+E)) en el peor caso, inaceptable a 5000 tareas. Es una simplificación deliberada y documentada, no un descuido.
+`dependencyImpact` uses the number of **direct dependents** (not the full transitive closure): calculating the true transitive impact of every task would be O(V·(V+E)) in the worst case, which is unacceptable with 5,000 tasks.
 
-La caché de `ScoringEngine` se invalida por completo al cambiar los pesos (`updateWeights`), porque un cambio de pesos afecta a todos los scores — una invalidación parcial sería más compleja que la propia caché sin aportar nada.
+This is a deliberate and documented simplification, not an oversight.
 
-## 8. Optimización (scheduling concurrente)
+The `ScoringEngine` cache is fully invalidated whenever the weights change (`updateWeights`), because changing the weights affects every score — partial invalidation would be more complex than the cache itself without providing any meaningful benefit.
 
-`Optimizer.runVirtual` y `SimulationEngine.run` comparten la misma función de decisión (`selectAdmissible`): nunca hay dos implementaciones divergentes de "qué se admite ahora". El primero usa un reloj **virtual** (salta directo al siguiente evento de finalización, cálculo síncrono e instantáneo — así es como PlanningEngine produce un plan de 5000 tareas en ~90ms). El segundo usa un reloj **real** vía `Promise.race` sobre un pool de promesas activas, para que la simulación sea concurrencia de verdad, no una barra de progreso que finge.
+## 8. Optimization (concurrent scheduling)
+
+`Optimizer.runVirtual` and `SimulationEngine.run` share the same decision function (`selectAdmissible`): there are never two diverging implementations of "what gets admitted now."
+
+The former uses a **virtual clock** (jumps directly to the next completion event; synchronous and instantaneous computation — this is how `PlanningEngine` can produce a plan for 5,000 tasks in ~90ms).
+
+The latter uses a **real clock** via `Promise.race` over a pool of active promises, providing actual concurrency rather than a progress bar that merely pretends to run tasks concurrently.
 
 ## 9. Performance
 
-Benchmark real (`Benchmark.run`, `performance.now()`, media de 5 repeticiones, `maxConcurrency=4`, dataset sintético con semilla fija):
+Real benchmark (`Benchmark.run`, `performance.now()`, average of 5 repetitions, `maxConcurrency=4`, fixed-seed synthetic dataset):
 
-| Tamaño | Media | Min | Max |
-|---|---|---|---|
-| 10 | 3.07ms | 0.38ms | 11.94ms |
-| 50 | 1.50ms | 1.23ms | 1.96ms |
-| 100 | 4.07ms | 2.80ms | 5.90ms |
-| 500 | 22.39ms | 10.97ms | 40.28ms |
-| 1000 | 40.11ms | 24.41ms | 64.50ms |
+| Size | Average |     Min |      Max |
+| ---- | ------: | ------: | -------: |
+| 10   |  3.07ms |  0.38ms |  11.94ms |
+| 50   |  1.50ms |  1.23ms |   1.96ms |
+| 100  |  4.07ms |  2.80ms |   5.90ms |
+| 500  | 22.39ms | 10.97ms |  40.28ms |
+| 1000 | 40.11ms | 24.41ms |  64.50ms |
 | 5000 | 91.74ms | 69.51ms | 140.92ms |
 
-500x más tareas (10 → 5000) cuesta ~30x más tiempo, consistente con la complejidad O(V log V + E) reclamada, no con un blow-up cuadrático.
+500× more tasks (10 → 5,000) costs ~30× more execution time, consistent with the claimed O(V log V + E) complexity rather than a quadratic blow-up.
 
-**Web Worker** (`planningWorker.js`): la UI delega `optimize()` a un worker a partir de 500 tareas (`WORKER_THRESHOLD` en `app.js`). Justificación real, no decorativa: 100ms bloqueando el hilo principal es perceptible (un frame a 60fps son ~16ms); por debajo del umbral, el coste de mensajería del worker superaría al del propio cálculo, así que ahí se ejecuta directo en el hilo principal.
+**Web Worker** (`planningWorker.js`): the UI delegates `optimize()` to a worker starting at 500 tasks (`WORKER_THRESHOLD` in `app.js`).
 
-**Cache LRU** (`performance/Cache.js`): usada por `ScoringEngine` (con cota de 20.000 entradas, red de seguridad — en la práctica nunca se acerca a ese límite gracias al heap persistente) y por `Benchmark` (evita regenerar el mismo dataset sintético entre repeticiones).
+The justification is practical rather than decorative: blocking the main thread for 100ms is noticeable (one frame at 60fps takes ~16ms). Below the threshold, the worker messaging overhead would exceed the computation cost itself, so execution remains on the main thread.
+
+**LRU Cache** (`performance/Cache.js`): used by `ScoringEngine` (with a 20,000-entry limit as a safety cap — in practice, it never comes close to that limit thanks to the persistent heap) and by `Benchmark` (to avoid regenerating the same synthetic dataset between repetitions).
 
 ## 10. Testing
 
-51 tests (`node --test`), sin mocks artificiales — cada test intenta encontrar un error real:
+51 tests (`node --test`), with no artificial mocks — each test attempts to find a real error:
 
-- `DependencyGraph`: construcción, ciclos, orden topológico, disponibilidad incremental.
-- `ScoringEngine`: pureza, orden por prioridad, invalidación de caché al cambiar pesos.
-- `ConflictDetector`: ciclos, deadlines imposibles (con cadena de dependencias), recursos imposibles, sobrecarga.
-- `PlanningEngine`: plan válido, tareas bloqueadas, respeto de `maxConcurrency` y de capacidad de recursos, dataset de 1000 tareas.
-- `Optimizer` / `SimulationEngine`: concurrencia real medida por eventos, deadlock por recurso imposible sin colgarse.
-- `EventBus`, `TaskRepository`, `DataGenerator`, `PriorityQueue`, `Cache`, `Benchmark`, `planningWorker`.
+* `DependencyGraph`: construction, cycles, topological ordering, incremental availability.
+* `ScoringEngine`: purity, priority ordering, cache invalidation when weights change.
+* `ConflictDetector`: cycles, impossible deadlines (with dependency chains), impossible resources, overload.
+* `PlanningEngine`: valid plan, blocked tasks, respect for `maxConcurrency` and resource capacity, 1,000-task dataset.
+* `Optimizer` / `SimulationEngine`: event-measured real concurrency, impossible-resource deadlock without hanging.
+* `EventBus`, `TaskRepository`, `DataGenerator`, `PriorityQueue`, `Cache`, `Benchmark`, `planningWorker`.
 
-Adicionalmente, `scripts/verify-ui.mjs` carga `index.html` + `app.js` con jsdom (inyectando sus globals y usando el loader real de ES modules de Node, ya que jsdom no ejecuta `<script type="module">`) y simula clicks reales por las 7 vistas, incluyendo ejecutar una simulación real y un benchmark. 21 comprobaciones, todas en verde.
+Additionally, `scripts/verify-ui.mjs` loads `index.html` + `app.js` with jsdom (injecting its globals and using Node's real ES module loader, since jsdom does not execute `<script type="module">`) and simulates real clicks across all 7 views, including running an actual simulation and benchmark.
+
+21 checks, all green.
 
 ```bash
-npm test         # suite unitaria (node --test)
-npm run verify-ui  # smoke test de la UI completa
+npm test          # unit test suite (node --test)
+npm run verify-ui  # full UI smoke test
 ```
 
-## 11. Decisiones técnicas relevantes
+## 11. Relevant technical decisions
 
-- **Task como factory inmutable, no clase**: no tiene comportamiento propio dependiente de su estado interno — es un registro de datos. `Object.freeze` (incluyendo arrays internos) evita mutaciones accidentales aguas abajo del pipeline.
-- **localStorage sobre IndexedDB**: el volumen (miles de tareas, JSON pequeño) cabe cómodo en localStorage; no hay queries indexadas ni transacciones que justifiquen IndexedDB.
-- **Impacto de dependientes directo, no transitivo** (ver §7): coste vs. beneficio explícito.
-- **Heap persistente, no heap-por-evento** (ver §5): fruto de una auditoría real de rendimiento, no de un diseño anticipado.
-- **`selectAdmissible` compartido entre Optimizer y SimulationEngine**: cero lógica de negoción de scheduling duplicada.
+* **Task as an immutable factory, not a class**: it has no behavior dependent on internal state — it is a data record. `Object.freeze` (including internal arrays) prevents accidental mutations downstream in the pipeline.
+* **localStorage over IndexedDB**: the volume (thousands of tasks, small JSON payloads) fits comfortably within localStorage; there are no indexed queries or transactions that would justify IndexedDB.
+* **Direct, not transitive, dependent impact** (see §7): explicit cost-vs-benefit trade-off.
+* **Persistent heap, not heap-per-event** (see §5): the result of a real performance audit, not an anticipated design choice.
+* **Shared `selectAdmissible` between Optimizer and SimulationEngine**: zero duplicated scheduling decision logic.
 
-## 12. Limitaciones conocidas
+## 12. Known limitations
 
-- El scheduling es una **heurística greedy**, no un solver óptimo de RCPSP: no garantiza el makespan mínimo teórico.
-- El impacto de una tarea sobre "otras tareas" en el scoring usa dependientes directos, no el cierre transitivo completo.
-- `GraphView` y el panel de Simulación truncan la visualización a 220 y 150 nodos respectivamente por legibilidad — el motor sí procesa el dataset completo, solo la vista se limita.
-- La tabla de Tareas no está virtualizada: con datasets muy grandes (miles de filas) el render del DOM, no el motor, sería el cuello de botella. No se abordó por estar fuera del alcance del motor algorítmico, que es el objeto real de este proyecto.
-- No se realizó una auditoría WCAG formal; sí se implementó HTML semántico, `aria-label` en controles icónicos, navegación por teclado nativa (botones/inputs reales) y un estado de foco visible consistente (`:focus-visible`).
-- El generador sintético (`DataGenerator`) construye datasets sin ciclos por construcción (las dependencias solo apuntan a índices anteriores): para probar la detección de ciclos se usan datasets manuales pequeños en los tests, no el generador masivo.
+* Scheduling is a **greedy heuristic**, not an optimal RCPSP solver: it does not guarantee the theoretical minimum makespan.
+* A task's impact on "other tasks" in the scoring system uses direct dependents, not the complete transitive closure.
+* `GraphView` and the Simulation panel truncate visualization to 220 and 150 nodes respectively for readability — the engine still processes the complete dataset; only the view is limited.
+* The Tasks table is not virtualized: with very large datasets (thousands of rows), DOM rendering rather than the engine would become the bottleneck. This was not addressed because it is outside the scope of the algorithmic engine, which is the actual subject of this project.
+* No formal WCAG audit was performed; however, semantic HTML, `aria-label` attributes on icon controls, native keyboard navigation (real buttons/inputs), and a consistent visible focus state (`:focus-visible`) were implemented.
+* The synthetic generator (`DataGenerator`) constructs datasets without cycles by design (dependencies only point to earlier indices): cycle detection is therefore tested using small manually constructed datasets rather than the large generator.
 
-## 13. Posibles mejoras
+## 13. Possible improvements
 
-- Reemplazar la heurística greedy por una metaheurística (recocido simulado, algoritmo genético) para acercarse más al óptimo en instancias medianas.
-- Calcular el impacto de dependientes de forma incremental y cacheada (en vez de direct-only) usando el mismo heap persistente para no pagar el coste transitivo completo.
-- Virtualización de la tabla de tareas y del grafo SVG para datasets de decenas de miles de tareas.
-- Persistir también el historial de simulaciones (no solo el estado final) para poder "reproducir" una ejecución pasada.
+* Replace the greedy heuristic with a metaheuristic (simulated annealing, genetic algorithm) to get closer to the optimum on medium-sized instances.
+* Calculate dependent impact incrementally and with caching (instead of direct-only) using the same persistent heap to avoid paying the full transitive cost.
+* Virtualize the task table and SVG graph for datasets containing tens of thousands of tasks.
+* Persist simulation history as well (not just the final state) to make it possible to "replay" a previous execution.
 
-## Ejecutar
+## Run
 
-Abre `index.html` directamente en un navegador moderno (usa módulos ES nativos, sin build step). Para los tests:
+Open `index.html` directly in a modern browser (it uses native ES modules, with no build step).
+
+For tests:
 
 ```bash
-npm install   # solo necesario para `npm run verify-ui` (jsdom); los tests unitarios no tienen dependencias
+npm install   # only required for `npm run verify-ui` (jsdom); unit tests have no dependencies
 npm test
 npm run verify-ui
 ```
+Contact / Commercial Use
+
+This project is free and open source. If your company needs a scheduling engine like this integrated into your product, tailored to a specific domain, or with ongoing support and maintenance, you can contact me at: <br>
+<a href="https://www.linkedin.com/in/facundo-aguilar-014265261/" target="_blank"><img src="https://raw.githubusercontent.com/maurodesouza/profile-readme-generator/master/src/assets/icons/social/linkedin/default.svg" width="22" height="22" alt="LinkedIn logo" style="vertical-align: middle; margin-right: 4px;" />  Facundo Aguilar</a>
