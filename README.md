@@ -171,6 +171,14 @@ npm install   # only required for `npm run verify-ui` (jsdom); unit tests have n
 npm test
 npm run verify-ui
 ```
+
+<div align="center">
+
+  [➡︎[Click here to open the Live Demo](https://teal-porcupine-167160.hostingersite.com/)
+
+</div>
+
+
 Contact / Commercial Use
 
 This project is free and open source. If your company needs a scheduling engine like this integrated into your product, tailored to a specific domain, or with ongoing support and maintenance, you can contact me at: <br>
