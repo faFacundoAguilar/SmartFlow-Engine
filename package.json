@@ -1,0 +1,16 @@
+{
+  "name": "smartflow-engine",
+  "version": "0.1.0",
+  "description": "Motor algorítmico de planificación y optimización de tareas basado en grafos, scoring dinámico y scheduling concurrente.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "verify-ui": "node scripts/verify-ui.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "^30.0.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
