@@ -1,5 +1,3 @@
-#SmartFlowEngine
-
 **SmartFlow Engine** is a JavaScript web application centered on an algorithmic scheduling engine designed to solve variants of the **RCPSP** (Resource-Constrained Project Scheduling Problem). It determines which tasks to execute in parallel, their optimal order, and their priority, while respecting dependencies and resource constraints. Its value lies entirely in the decoupled engine (`/src/core`).
 
 ---
