@@ -4,7 +4,7 @@
 
 ---
 
-## 💡 Concept and architecture
+##  Concept and architecture
 
 * **Strict decoupling:** The user interface (UI) consumes the engine, but the engine has no knowledge of the interface.
 * **Pure entry point:** The main entry point (`PlanningEngine.optimize()`) is pure and idempotent, facilitating testing, caching, and delegation to Web Workers.
@@ -27,7 +27,7 @@ The engine prioritizes high performance and scalability through the following ke
 
 ---
 
-## 📊Performance and Testing
+## Performance and Testing
 
 * **Scalability:** Execution time scales smoothly, ranging from **~3 ms for 10 tasks** to **~90 ms for 5,000 tasks**.
 * **Web Worker:** Tasks with datasets exceeding 500 nodes automatically delegate calculations to a background thread (`planningWorker.js`) to maintain UI main-thread responsiveness.
@@ -41,3 +41,5 @@ npm run verify-ui # Run
 ```
 
 Project in production </>
+
+[Visitar sitio ↗︎](https://teal-porcupine-167160.hostingersite.com/)
