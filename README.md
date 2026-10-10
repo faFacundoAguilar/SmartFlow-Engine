@@ -40,4 +40,4 @@ npm run verify-ui # Run
 
 Project in production </>
 
-[Visitar sitio ↗︎](https://teal-porcupine-167160.hostingersite.com/)
+[Visit the site ↗︎](https://teal-porcupine-167160.hostingersite.com/)
